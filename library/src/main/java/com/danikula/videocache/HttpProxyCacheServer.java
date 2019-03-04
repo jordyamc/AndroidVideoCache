@@ -2,6 +2,8 @@ package com.danikula.videocache;
 
 import android.content.Context;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
+import android.text.format.Formatter;
 
 import com.danikula.videocache.file.DiskUsage;
 import com.danikula.videocache.file.FileNameGenerator;
@@ -54,7 +56,7 @@ import static com.danikula.videocache.Preconditions.checkNotNull;
 public class HttpProxyCacheServer {
 
     private static final Logger LOG = LoggerFactory.getLogger("HttpProxyCacheServer");
-    private static final String PROXY_HOST = "127.0.0.1";
+    private static String PROXY_HOST = "127.0.0.1";
 
     private final Object clientsLock = new Object();
     private final ExecutorService socketProcessor = Executors.newFixedThreadPool(8);
@@ -66,10 +68,19 @@ public class HttpProxyCacheServer {
     private final Pinger pinger;
 
     public HttpProxyCacheServer(Context context) {
-        this(new Builder(context).buildConfig());
+        this(new Builder(context).buildConfig(),null);
     }
 
-    private HttpProxyCacheServer(Config config) {
+    public HttpProxyCacheServer(Context context, String customHost) {
+        this(new Builder(context).buildConfig(),customHost == null ? getIP(context) : customHost);
+    }
+
+    private static String getIP(Context context){
+        return Formatter.formatIpAddress(((WifiManager)context.getApplicationContext().getSystemService(Context.WIFI_SERVICE)).getConnectionInfo().getIpAddress());
+    }
+
+    private HttpProxyCacheServer(Config config,String host) {
+        PROXY_HOST = host;
         this.config = checkNotNull(config);
         try {
             InetAddress inetAddress = InetAddress.getByName(PROXY_HOST);
@@ -88,31 +99,10 @@ public class HttpProxyCacheServer {
         }
     }
 
-    /**
-     * Returns url that wrap original url and should be used for client (MediaPlayer, ExoPlayer, etc).
-     * <p>
-     * If file for this url is fully cached (it means method {@link #isCached(String)} returns {@code true})
-     * then file:// uri to cached file will be returned.
-     * <p>
-     * Calling this method has same effect as calling {@link #getProxyUrl(String, boolean)} with 2nd parameter set to {@code true}.
-     *
-     * @param url a url to file that should be cached.
-     * @return a wrapped by proxy url if file is not fully cached or url pointed to cache file otherwise.
-     */
     public String getProxyUrl(String url) {
         return getProxyUrl(url, true);
     }
 
-    /**
-     * Returns url that wrap original url and should be used for client (MediaPlayer, ExoPlayer, etc).
-     * <p>
-     * If parameter {@code allowCachedFileUri} is {@code true} and file for this url is fully cached
-     * (it means method {@link #isCached(String)} returns {@code true}) then file:// uri to cached file will be returned.
-     *
-     * @param url                a url to file that should be cached.
-     * @param allowCachedFileUri {@code true} if allow to return file:// uri if url is fully cached
-     * @return a wrapped by proxy url if file is not fully cached or url pointed to cache file otherwise (if {@code allowCachedFileUri} is {@code true}).
-     */
     public String getProxyUrl(String url, boolean allowCachedFileUri) {
         if (allowCachedFileUri && isCached(url)) {
             File cacheFile = getCacheFile(url);
@@ -312,35 +302,6 @@ public class HttpProxyCacheServer {
         LOG.error("HttpProxyCacheServer error", e);
     }
 
-    private final class WaitRequestsRunnable implements Runnable {
-
-        private final CountDownLatch startSignal;
-
-        public WaitRequestsRunnable(CountDownLatch startSignal) {
-            this.startSignal = startSignal;
-        }
-
-        @Override
-        public void run() {
-            startSignal.countDown();
-            waitForRequest();
-        }
-    }
-
-    private final class SocketProcessorRunnable implements Runnable {
-
-        private final Socket socket;
-
-        public SocketProcessorRunnable(Socket socket) {
-            this.socket = socket;
-        }
-
-        @Override
-        public void run() {
-            processSocket(socket);
-        }
-    }
-
     /**
      * Builder for {@link HttpProxyCacheServer}.
      */
@@ -448,12 +409,41 @@ public class HttpProxyCacheServer {
          */
         public HttpProxyCacheServer build() {
             Config config = buildConfig();
-            return new HttpProxyCacheServer(config);
+            return new HttpProxyCacheServer(config,"127.0.0.1");
         }
 
         private Config buildConfig() {
             return new Config(cacheRoot, fileNameGenerator, diskUsage, sourceInfoStorage, headerInjector);
         }
 
+    }
+
+    private final class WaitRequestsRunnable implements Runnable {
+
+        private final CountDownLatch startSignal;
+
+        public WaitRequestsRunnable(CountDownLatch startSignal) {
+            this.startSignal = startSignal;
+        }
+
+        @Override
+        public void run() {
+            startSignal.countDown();
+            waitForRequest();
+        }
+    }
+
+    private final class SocketProcessorRunnable implements Runnable {
+
+        private final Socket socket;
+
+        public SocketProcessorRunnable(Socket socket) {
+            this.socket = socket;
+        }
+
+        @Override
+        public void run() {
+            processSocket(socket);
+        }
     }
 }
